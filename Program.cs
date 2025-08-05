@@ -39,11 +39,16 @@ app.MapPost("/convert", async (
     File.Delete(tempWav);
 
     return Results.File(wavBytes, "audio/wav", Path.GetFileName(tempWav));
-});
+}).DisableAntiforgery();
 
 app.Run();
 
-public record MongoSettings(string ConnectionString, string DatabaseName);
+// public record MongoSettings(string ConnectionString, string DatabaseName);
+public record MongoSettings
+{
+    public string ConnectionString { get; init; } = string.Empty;
+    public string DatabaseName { get; init; } = string.Empty;
+};
 
 public class MongoService
 {
@@ -69,7 +74,7 @@ public class MongoService
     public record ConversionLog
     {
         public ObjectId Id { get; set; }
-        public string FileName { get; set; }
+        public string? FileName { get; set; }
         public DateTime ConvertedAt { get; set; }
     }
 }
