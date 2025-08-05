@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -23,14 +24,30 @@ app.MapPost("/convert", async (
     if (file == null || Path.GetExtension(file.FileName).ToLower() != ".mp3")
         return Results.BadRequest("Only MP3 files allowed.");
 
-    var tempMp3 = Path.GetTempFileName() + ".mp3";
+    var tempMp3 = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".mp3");
     var tempWav = Path.ChangeExtension(tempMp3, ".wav");
 
     await using (var stream = File.Create(tempMp3))
         await file.CopyToAsync(stream);
 
-    using var mp3Reader = new NAudio.Wave.Mp3FileReader(tempMp3);
-    NAudio.Wave.WaveFileWriter.CreateWaveFile(tempWav, mp3Reader);
+    var ffmpeg = new Process
+    {
+        StartInfo = new ProcessStartInfo
+        {
+            FileName = "ffmpeg",
+            Arguments = $"-y -i \"{tempMp3}\" \"{tempWav}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }
+    };
+
+    ffmpeg.Start();
+    await ffmpeg.WaitForExitAsync();
+
+    if (!File.Exists(tempWav))
+        return Results.Problem("FFmpeg conversion failed.");
 
     var wavBytes = await File.ReadAllBytesAsync(tempWav);
     await mongoService.SaveConversionAsync(file.FileName);
@@ -40,6 +57,7 @@ app.MapPost("/convert", async (
 
     return Results.File(wavBytes, "audio/wav", Path.GetFileName(tempWav));
 }).DisableAntiforgery();
+
 
 app.Run();
 
