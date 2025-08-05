@@ -24,12 +24,14 @@ app.MapPost("/convert", async (
     if (file == null || Path.GetExtension(file.FileName).ToLower() != ".mp3")
         return Results.BadRequest("Only MP3 files allowed.");
 
-    var tempMp3 = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".mp3");
+    var tempDir = Path.GetTempPath();
+    var tempMp3 = Path.Combine(tempDir, Guid.NewGuid() + ".mp3");
     var tempWav = Path.ChangeExtension(tempMp3, ".wav");
 
     await using (var stream = File.Create(tempMp3))
         await file.CopyToAsync(stream);
 
+    // Convert MP3 to WAV using FFmpeg
     var ffmpeg = new Process
     {
         StartInfo = new ProcessStartInfo
@@ -42,31 +44,58 @@ app.MapPost("/convert", async (
             CreateNoWindow = true
         }
     };
-
     ffmpeg.Start();
     await ffmpeg.WaitForExitAsync();
 
     if (!File.Exists(tempWav))
-        return Results.Problem("FFmpeg conversion failed.");
+        return Results.Problem("Audio conversion failed.");
 
-    var wavBytes = await File.ReadAllBytesAsync(tempWav);
+    // Define output directory and expected transcript path
+    var outputDir = Path.GetTempPath();
+    var transcriptFile = Path.Combine(outputDir, Path.GetFileNameWithoutExtension(tempWav) + ".txt");
+
+    // Transcribe using Whisper
+    var whisper = new Process
+    {
+        StartInfo = new ProcessStartInfo
+        {
+            FileName = "/Users/WorkSpace/whisper-env/bin/python",  // Update this path as needed
+            Arguments = $"-m whisper \"{tempWav}\" --language English --model base --output_format txt --output_dir \"{outputDir}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }
+    };
+    whisper.Start();
+    string whisperErrors = await whisper.StandardError.ReadToEndAsync();
+    await whisper.WaitForExitAsync();
+
+    Console.WriteLine("WHISPER STDERR:");
+    Console.WriteLine(whisperErrors);
+
+    if (!File.Exists(transcriptFile))
+        return Results.Problem("Whisper transcription failed or produced no output.");
+
+    var transcript = await File.ReadAllTextAsync(transcriptFile);
+
     await mongoService.SaveConversionAsync(file.FileName);
 
+    // Cleanup
     File.Delete(tempMp3);
     File.Delete(tempWav);
+    File.Delete(transcriptFile);
 
-    return Results.File(wavBytes, "audio/wav", Path.GetFileName(tempWav));
+    return Results.Ok(new { transcript });
 }).DisableAntiforgery();
-
 
 app.Run();
 
-// public record MongoSettings(string ConnectionString, string DatabaseName);
 public record MongoSettings
 {
     public string ConnectionString { get; init; } = string.Empty;
     public string DatabaseName { get; init; } = string.Empty;
-};
+}
 
 public class MongoService
 {
